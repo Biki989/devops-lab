@@ -1,8 +1,15 @@
-import os
 import json
+import os
 from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
+
+
+def get_conn():
+    # Compose injects DATABASE_URL; service name "db" acts as hostname
+    import psycopg2
+    db_url = os.getenv("DATABASE_URL", "postgresql://labuser:labpass@localhost:5432/labdb")
+    return psycopg2.connect(db_url)
 
 
 @app.route("/")
@@ -16,6 +23,42 @@ def home():
     return render_template("index.html")
 
 
+@app.route("/health")
+def health():
+    return jsonify(status="healthy", service="flask-demo"), 200
+
+
+@app.route("/init")
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS visits ("
+        "id SERIAL PRIMARY KEY, "
+        "ts TIMESTAMP DEFAULT NOW()"
+        ");"
+    )
+    conn.commit()
+    cur.close()
+    conn.close()
+    return "database initialized"
+
+
+@app.route("/count")
+def count():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO visits (ts) VALUES (NOW()); "
+        "SELECT COUNT(*) FROM visits;"
+    )
+    n = cur.fetchone()[0]
+    conn.commit()
+    cur.close()
+    conn.close()
+    return jsonify(total_visits=n)
+
+
 @app.route("/api/student", methods=["GET", "POST"])
 @app.route("/api/students", methods=["GET", "POST"])
 def manage_students():
@@ -24,7 +67,7 @@ def manage_students():
         if not data:
             data = request.form.to_dict()
 
-        if not data:
+        if not data or not data.get("name"):
             return jsonify(error="No student data provided"), 400
 
         with open("students.txt", "a") as f:
@@ -32,31 +75,17 @@ def manage_students():
 
         return jsonify(message="Student saved successfully", data=data), 201
 
-    form_html = """
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <title>Add Student</title>
-        <style>
-            body { font-family: sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-            .card { background: #1e293b; padding: 2.5rem; border-radius: 12px; text-align: center; border: 1px solid #334155; }
-            input { margin: 10px 0; padding: 10px; width: 80%; border-radius: 6px; border: none; }
-            button { margin-top: 15px; padding: 10px 20px; cursor: pointer; background: #38bdf8; border: none; border-radius: 6px; color: #000; font-weight: bold; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h2>Add Student</h2>
-            <form method="POST" action="/api/students">
-                <input type="text" name="name" placeholder="Student Name" required><br>
-                <input type="number" name="age" placeholder="Student Age" required><br>
-                <button type="submit">Save Student</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
-    return form_html
+    if request.args.get("format") == "json":
+        students = []
+        if os.path.exists("students.txt"):
+            with open("students.txt", "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        students.append(json.loads(line))
+        return jsonify(students=students)
+
+    return render_template("student_form.html")
 
 
 if __name__ == "__main__":
